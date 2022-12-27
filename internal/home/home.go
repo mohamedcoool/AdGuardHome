@@ -543,9 +543,9 @@ func run(opts options, clientBuildFS fs.FS) {
 		}
 	}
 
-	// TODO(a.garipov): This could be made much earlier and could be done on
-	// the first run as well, but to achieve this we need to bypass requests
-	// over dnsforward resolver.
+	// TODO(a.garipov): This could be made much earlier and could be done on the
+	// first run as well, but to achieve this we need to bypass requests over
+	// dnsforward resolver.
 	cmdlineUpdate(opts)
 
 	Context.web.Start()
@@ -940,7 +940,7 @@ func cmdlineUpdate(opts options) {
 		return
 	}
 
-	log.Info("starting update")
+	log.Info("performing update")
 
 	if Context.firstRun {
 		log.Info("update not allowed on first run")
@@ -948,15 +948,15 @@ func cmdlineUpdate(opts options) {
 		os.Exit(0)
 	}
 
-	_, err := Context.updater.VersionInfo(true)
+	info, err := Context.updater.VersionInfo(true)
 	if err != nil {
 		vcu := Context.updater.VersionCheckURL()
 		log.Error("getting version info from %s: %s", vcu, err)
 
-		os.Exit(0)
+		os.Exit(1)
 	}
 
-	if Context.updater.NewVersion() == "" {
+	if info.NewVersion == version.Version() {
 		log.Info("no updates available")
 
 		os.Exit(0)
