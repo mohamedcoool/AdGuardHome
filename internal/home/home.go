@@ -455,6 +455,17 @@ func run(opts options, clientBuildFS fs.FS) {
 	err = setupConfig(opts)
 	fatalOnError(err)
 
+	// TODO(e.burkov):  !! This could be made much earlier and could be done on
+	// the first run as well, but to achieve this we need to bypass requests
+	// over dnsforward resolver.
+	//
+	// 1. minimum init
+	// 2. use bootstrap
+	// 3. unfiltered
+	if opts.performUpdate {
+		cmdlineUpdate()
+	}
+
 	if !Context.firstRun {
 		// Save the updated config
 		err = config.write()
@@ -542,11 +553,6 @@ func run(opts options, clientBuildFS fs.FS) {
 			}
 		}
 	}
-
-	// TODO(a.garipov): This could be made much earlier and could be done on the
-	// first run as well, but to achieve this we need to bypass requests over
-	// dnsforward resolver.
-	cmdlineUpdate(opts)
 
 	Context.web.Start()
 
@@ -935,22 +941,19 @@ type jsonError struct {
 }
 
 // cmdlineUpdate updates current application and exits.
-func cmdlineUpdate(opts options) {
-	if !opts.performUpdate {
-		return
-	}
-
-	log.Info("cmdline update: performing update")
-
+func cmdlineUpdate() {
 	if Context.firstRun {
-		log.Info("update not allowed on first run")
+		log.Info("updates are not allowed on first run")
 
 		os.Exit(0)
 	}
 
-	info, err := Context.updater.VersionInfo(true)
+	log.Info("cmdline update: performing update")
+
+	updater := Context.updater
+	info, err := updater.VersionInfo(true)
 	if err != nil {
-		vcu := Context.updater.VersionCheckURL()
+		vcu := updater.VersionCheckURL()
 		log.Error("getting version info from %s: %s", vcu, err)
 
 		os.Exit(1)
@@ -962,7 +965,7 @@ func cmdlineUpdate(opts options) {
 		os.Exit(0)
 	}
 
-	err = Context.updater.Update()
+	err = updater.Update()
 	fatalOnError(err)
 
 	os.Exit(0)
