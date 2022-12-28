@@ -1056,5 +1056,12 @@ func cmdlineUpdate(opts options) {
 	err = updater.Update(Context.firstRun)
 	fatalOnError(err)
 
+	err = tryRestartService()
+	if err != nil {
+		log.Debug("restarting service: %s", err)
+		log.Info("It seems AdGuard Home isn't running as a service, " +
+			"might want to restart it manually")
+	}
+
 	os.Exit(0)
 }

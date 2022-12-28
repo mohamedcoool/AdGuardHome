@@ -42,7 +42,9 @@ See also the [v0.107.21 GitHub milestone][ms-v0.107.21].
 
 ### Fixed
 
-- The `--update` flag performing an update even with the same version ([#5191]).
+- Freezing update with the `--update` flag used while another instance of
+  AdGuard Home running ([#4223], [#5191]).
+- The `--update` flag performing an update even with the same version.
 - Failing HTTPS redirection on saving the encryption settings ([#4898]).
 - Zeroing rules counter of erroneusly edited filtering rule lists ([#5290]).
 - Filters updating strategy, which could sometimes lead to use of broken or

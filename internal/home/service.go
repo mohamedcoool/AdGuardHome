@@ -159,6 +159,38 @@ func sendSigReload() {
 	log.Debug("service: sent signal to pid %d", pid)
 }
 
+// tryRestartService tries to restart the service.  It returns an error if the
+// service couldn't be restarted.
+func tryRestartService() (err error) {
+	// Call chooseSystem explicitly to introduce OpenBSD support for service
+	// package.  It's a noop for other GOOS values.
+	chooseSystem()
+
+	pwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getting current directory: %w", err)
+	}
+
+	svcConfig := &service.Config{
+		Name:             serviceName,
+		DisplayName:      serviceDisplayName,
+		Description:      serviceDescription,
+		WorkingDirectory: pwd,
+	}
+	configureService(svcConfig)
+
+	var s service.Service
+	if s, err = service.New(&program{}, svcConfig); err != nil {
+		return fmt.Errorf("initializing service: %w", err)
+	}
+
+	if err = svcAction(s, "restart"); err != nil {
+		return fmt.Errorf("restarting service: %w", err)
+	}
+
+	return nil
+}
+
 // handleServiceControlAction one of the possible control actions:
 //
 //   - install:  Installs a service/daemon.
