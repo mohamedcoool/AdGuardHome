@@ -504,6 +504,10 @@ func zipFileUnpack(zipfile, outDir string) (files []string, err error) {
 
 // Copy file on disk
 func copyFile(src, dst string) error {
+	if src == "" || src == dst {
+		return nil
+	}
+
 	d, e := os.ReadFile(src)
 	if e != nil {
 		return e

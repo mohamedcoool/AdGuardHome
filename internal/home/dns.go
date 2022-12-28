@@ -6,10 +6,11 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"path/filepath"
 
 	"github.com/AdguardTeam/AdGuardHome/internal/aghalg"
+	"github.com/AdguardTeam/AdGuardHome/internal/aghhttp"
 	"github.com/AdguardTeam/AdGuardHome/internal/aghnet"
+	"github.com/AdguardTeam/AdGuardHome/internal/dhcpd"
 	"github.com/AdguardTeam/AdGuardHome/internal/dnsforward"
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
 	"github.com/AdguardTeam/AdGuardHome/internal/querylog"
@@ -42,74 +43,28 @@ func onConfigModified() {
 // initDNSServer creates an instance of the dnsforward.Server
 // Please note that we must do it even if we don't start it
 // so that we had access to the query log and the stats
-func initDNSServer() (err error) {
-	baseDir := Context.getDataDir()
-
-	var anonFunc aghnet.IPMutFunc
-	if config.DNS.AnonymizeClientIP {
-		anonFunc = querylog.AnonymizeIP
-	}
-	anonymizer := aghnet.NewIPMut(anonFunc)
-
-	statsConf := stats.Config{
-		Filename:       filepath.Join(baseDir, "stats.db"),
-		LimitDays:      config.DNS.StatsInterval,
-		ConfigModified: onConfigModified,
-		HTTPRegister:   httpRegister,
-	}
-	Context.stats, err = stats.New(statsConf)
+func initDNSServer(
+	filters *filtering.DNSFilter,
+	sts stats.Interface,
+	qlog querylog.QueryLog,
+	dhcpSrv dhcpd.Interface,
+	anonymizer *aghnet.IPMut,
+	httpReg aghhttp.RegisterFunc,
+	tlsConf *tlsConfigSettings,
+) (err error) {
+	privateNets, err := parseSubnetSet(config.DNS.PrivateNets)
 	if err != nil {
-		return fmt.Errorf("init stats: %w", err)
-	}
-
-	conf := querylog.Config{
-		Anonymizer:        anonymizer,
-		ConfigModified:    onConfigModified,
-		HTTPRegister:      httpRegister,
-		FindClient:        Context.clients.findMultiple,
-		BaseDir:           baseDir,
-		RotationIvl:       config.DNS.QueryLogInterval.Duration,
-		MemSize:           config.DNS.QueryLogMemSize,
-		Enabled:           config.DNS.QueryLogEnabled,
-		FileEnabled:       config.DNS.QueryLogFileEnabled,
-		AnonymizeClientIP: config.DNS.AnonymizeClientIP,
-	}
-	Context.queryLog = querylog.New(conf)
-
-	Context.filters, err = filtering.New(config.DNS.DnsfilterConf, nil)
-	if err != nil {
-		// Don't wrap the error, since it's informative enough as is.
-		return err
-	}
-
-	var privateNets netutil.SubnetSet
-	switch len(config.DNS.PrivateNets) {
-	case 0:
-		// Use an optimized locally-served matcher.
-		privateNets = netutil.SubnetSetFunc(netutil.IsLocallyServed)
-	case 1:
-		privateNets, err = netutil.ParseSubnet(config.DNS.PrivateNets[0])
-		if err != nil {
-			return fmt.Errorf("preparing the set of private subnets: %w", err)
-		}
-	default:
-		var nets []*net.IPNet
-		nets, err = netutil.ParseSubnets(config.DNS.PrivateNets...)
-		if err != nil {
-			return fmt.Errorf("preparing the set of private subnets: %w", err)
-		}
-
-		privateNets = netutil.SliceSubnetSet(nets)
+		return fmt.Errorf("preparing private subnets: %w", err)
 	}
 
 	p := dnsforward.DNSCreateParams{
-		DNSFilter:   Context.filters,
-		Stats:       Context.stats,
-		QueryLog:    Context.queryLog,
+		DNSFilter:   filters,
+		Stats:       sts,
+		QueryLog:    qlog,
 		PrivateNets: privateNets,
 		Anonymizer:  anonymizer,
 		LocalDomain: config.DHCP.LocalDomainName,
-		DHCPServer:  Context.dhcpServer,
+		DHCPServer:  dhcpSrv,
 	}
 
 	Context.dnsServer, err = dnsforward.NewServer(p)
@@ -121,7 +76,8 @@ func initDNSServer() (err error) {
 
 	Context.clients.dnsServer = Context.dnsServer
 	var dnsConfig dnsforward.ServerConfig
-	dnsConfig, err = generateServerConfig()
+
+	dnsConfig, err = generateServerConfig(tlsConf, httpReg)
 	if err != nil {
 		closeDNSServer()
 
@@ -144,6 +100,32 @@ func initDNSServer() (err error) {
 	}
 
 	return nil
+}
+
+// parseSubnetSet parses a slice of subnets.  If the slice is empty, it returns
+// a subnet set that matches all locally served networks, see
+// [netutil.IsLocallyServed].
+func parseSubnetSet(nets []string) (s netutil.SubnetSet, err error) {
+	switch len(nets) {
+	case 0:
+		// Use an optimized function-based matcher.
+		return netutil.SubnetSetFunc(netutil.IsLocallyServed), nil
+	case 1:
+		s, err = netutil.ParseSubnet(nets[0])
+		if err != nil {
+			return nil, fmt.Errorf("preparing the set of private subnets: %w", err)
+		}
+
+		return s, nil
+	default:
+		var nets []*net.IPNet
+		nets, err = netutil.ParseSubnets(config.DNS.PrivateNets...)
+		if err != nil {
+			return nil, fmt.Errorf("preparing the set of private subnets: %w", err)
+		}
+
+		return netutil.SliceSubnetSet(nets), nil
+	}
 }
 
 func isRunning() bool {
@@ -193,7 +175,10 @@ func ipsToUDPAddrs(ips []netip.Addr, port int) (udpAddrs []*net.UDPAddr) {
 	return udpAddrs
 }
 
-func generateServerConfig() (newConf dnsforward.ServerConfig, err error) {
+func generateServerConfig(
+	tlsConf *tlsConfigSettings,
+	httpReg aghhttp.RegisterFunc,
+) (newConf dnsforward.ServerConfig, err error) {
 	dnsConf := config.DNS
 	hosts := aghalg.CoalesceSlice(dnsConf.BindHosts, []netip.Addr{netutil.IPv4Localhost()})
 	newConf = dnsforward.ServerConfig{
@@ -201,12 +186,10 @@ func generateServerConfig() (newConf dnsforward.ServerConfig, err error) {
 		TCPListenAddrs:  ipsToTCPAddrs(hosts, dnsConf.Port),
 		FilteringConfig: dnsConf.FilteringConfig,
 		ConfigModified:  onConfigModified,
-		HTTPRegister:    httpRegister,
+		HTTPRegister:    httpReg,
 		OnDNSRequest:    onDNSRequest,
 	}
 
-	tlsConf := tlsConfigSettings{}
-	Context.tls.WriteDiskConfig(&tlsConf)
 	if tlsConf.Enabled {
 		newConf.TLSConfig = tlsConf.TLSConfig
 		newConf.TLSConfig.ServerName = tlsConf.ServerName
@@ -224,7 +207,7 @@ func generateServerConfig() (newConf dnsforward.ServerConfig, err error) {
 		}
 
 		if tlsConf.PortDNSCrypt != 0 {
-			newConf.DNSCryptConfig, err = newDNSCrypt(hosts, tlsConf)
+			newConf.DNSCryptConfig, err = newDNSCrypt(hosts, *tlsConf)
 			if err != nil {
 				// Don't wrap the error, because it's already
 				// wrapped by newDNSCrypt.
@@ -413,7 +396,11 @@ func startDNSServer() error {
 
 func reconfigureDNSServer() (err error) {
 	var newConf dnsforward.ServerConfig
-	newConf, err = generateServerConfig()
+
+	tlsConf := &tlsConfigSettings{}
+	Context.tls.WriteDiskConfig(tlsConf)
+
+	newConf, err = generateServerConfig(tlsConf, httpRegister)
 	if err != nil {
 		return fmt.Errorf("generating forwarding dns server config: %w", err)
 	}

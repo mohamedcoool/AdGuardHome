@@ -455,16 +455,9 @@ func run(opts options, clientBuildFS fs.FS) {
 	err = setupConfig(opts)
 	fatalOnError(err)
 
-	// TODO(e.burkov):  !! This could be made much earlier and could be done on
-	// the first run as well, but to achieve this we need to bypass requests
-	// over dnsforward resolver.
-	//
-	// 1. minimum init
-	// 2. use bootstrap
-	// 3. unfiltered
-	if opts.performUpdate {
-		cmdlineUpdate()
-	}
+	// TODO(e.burkov):  This could probably be made much earlier and certainly
+	// could be done on the first run as well.
+	cmdlineUpdate(opts)
 
 	if !Context.firstRun {
 		// Save the updated config
@@ -533,7 +526,47 @@ func run(opts options, clientBuildFS fs.FS) {
 	fatalOnError(err)
 
 	if !Context.firstRun {
-		err = initDNSServer()
+		baseDir := Context.getDataDir()
+		anonymizer := config.anonymizer()
+
+		statsConf := stats.Config{
+			Filename:       filepath.Join(baseDir, "stats.db"),
+			LimitDays:      config.DNS.StatsInterval,
+			ConfigModified: onConfigModified,
+			HTTPRegister:   httpRegister,
+		}
+		Context.stats, err = stats.New(statsConf)
+		fatalOnError(errors.Annotate(err, "init stats: %w"))
+
+		conf := querylog.Config{
+			Anonymizer:        anonymizer,
+			ConfigModified:    onConfigModified,
+			HTTPRegister:      httpRegister,
+			FindClient:        Context.clients.findMultiple,
+			BaseDir:           baseDir,
+			RotationIvl:       config.DNS.QueryLogInterval.Duration,
+			MemSize:           config.DNS.QueryLogMemSize,
+			Enabled:           config.DNS.QueryLogEnabled,
+			FileEnabled:       config.DNS.QueryLogFileEnabled,
+			AnonymizeClientIP: config.DNS.AnonymizeClientIP,
+		}
+		Context.queryLog = querylog.New(conf)
+
+		Context.filters, err = filtering.New(config.DNS.DnsfilterConf, nil)
+		// Don't wrap the error, since it's informative enough as is.
+		fatalOnError(err)
+
+		tlsConf := &tlsConfigSettings{}
+		Context.tls.WriteDiskConfig(tlsConf)
+		err = initDNSServer(
+			Context.filters,
+			Context.stats,
+			Context.queryLog,
+			Context.dhcpServer,
+			anonymizer,
+			httpRegister,
+			tlsConf,
+		)
 		fatalOnError(err)
 
 		Context.tls.start()
@@ -560,9 +593,63 @@ func run(opts options, clientBuildFS fs.FS) {
 	select {}
 }
 
+func (c *configuration) anonymizer() (ipmut *aghnet.IPMut) {
+	var anonFunc aghnet.IPMutFunc
+	if c.DNS.AnonymizeClientIP {
+		anonFunc = querylog.AnonymizeIP
+	}
+
+	return aghnet.NewIPMut(anonFunc)
+}
+
 // startMods initializes and starts the DNS server after installation.
-func startMods() error {
-	err := initDNSServer()
+func startMods() (err error) {
+	baseDir := Context.getDataDir()
+
+	anonymizer := config.anonymizer()
+
+	statsConf := stats.Config{
+		Filename:       filepath.Join(baseDir, "stats.db"),
+		LimitDays:      config.DNS.StatsInterval,
+		ConfigModified: onConfigModified,
+		HTTPRegister:   httpRegister,
+	}
+	Context.stats, err = stats.New(statsConf)
+	if err != nil {
+		return fmt.Errorf("init stats: %w", err)
+	}
+
+	conf := querylog.Config{
+		Anonymizer:        anonymizer,
+		ConfigModified:    onConfigModified,
+		HTTPRegister:      httpRegister,
+		FindClient:        Context.clients.findMultiple,
+		BaseDir:           baseDir,
+		RotationIvl:       config.DNS.QueryLogInterval.Duration,
+		MemSize:           config.DNS.QueryLogMemSize,
+		Enabled:           config.DNS.QueryLogEnabled,
+		FileEnabled:       config.DNS.QueryLogFileEnabled,
+		AnonymizeClientIP: config.DNS.AnonymizeClientIP,
+	}
+	Context.queryLog = querylog.New(conf)
+
+	Context.filters, err = filtering.New(config.DNS.DnsfilterConf, nil)
+	if err != nil {
+		// Don't wrap the error, since it's informative enough as is.
+		return err
+	}
+
+	tlsConf := &tlsConfigSettings{}
+	Context.tls.WriteDiskConfig(tlsConf)
+	err = initDNSServer(
+		Context.filters,
+		Context.stats,
+		Context.queryLog,
+		Context.dhcpServer,
+		anonymizer,
+		httpRegister,
+		tlsConf,
+	)
 	if err != nil {
 		return err
 	}
@@ -933,15 +1020,22 @@ func getHTTPProxy(_ *http.Request) (*url.URL, error) {
 
 // jsonError is a generic JSON error response.
 //
-// TODO(a.garipov): Merge together with the implementations in .../dhcpd and
-// other packages after refactoring the web handler registering.
+// TODO(a.garipov): Merge together with the implementations in [dhcpd] and other
+// packages after refactoring the web handler registering.
 type jsonError struct {
 	// Message is the error message, an opaque string.
 	Message string `json:"message"`
 }
 
 // cmdlineUpdate updates current application and exits.
-func cmdlineUpdate() {
+func cmdlineUpdate(opts options) {
+	if !opts.performUpdate {
+		return
+	}
+
+	err := initDNSServer(nil, nil, nil, nil, nil, nil, &tlsConfigSettings{})
+	fatalOnError(err)
+
 	if Context.firstRun {
 		log.Info("updates are not allowed on first run")
 
