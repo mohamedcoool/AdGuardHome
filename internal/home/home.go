@@ -940,7 +940,7 @@ func cmdlineUpdate(opts options) {
 		return
 	}
 
-	log.Info("performing update")
+	log.Info("cmdline update: performing update")
 
 	if Context.firstRun {
 		log.Info("update not allowed on first run")
