@@ -1036,12 +1036,6 @@ func cmdlineUpdate(opts options) {
 	err := initDNSServer(nil, nil, nil, nil, nil, nil, &tlsConfigSettings{})
 	fatalOnError(err)
 
-	if Context.firstRun {
-		log.Info("updates are not allowed on first run")
-
-		os.Exit(0)
-	}
-
 	log.Info("cmdline update: performing update")
 
 	updater := Context.updater
@@ -1059,7 +1053,7 @@ func cmdlineUpdate(opts options) {
 		os.Exit(0)
 	}
 
-	err = updater.Update()
+	err = updater.Update(Context.firstRun)
 	fatalOnError(err)
 
 	os.Exit(0)

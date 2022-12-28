@@ -105,48 +105,56 @@ func NewUpdater(conf *Config) *Updater {
 }
 
 // Update performs the auto-update.
-func (u *Updater) Update() (err error) {
+func (u *Updater) Update(firstRun bool) (err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
 	log.Info("updater: updating")
-	defer func() { log.Info("updater: finished; errors: %v", err) }()
+	defer func() {
+		if err != nil {
+			log.Error("updater: failed: %v", err)
+		} else {
+			log.Info("updater: finished")
+		}
+	}()
 
 	execPath, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("getting executable path: %w", err)
 	}
 
 	err = u.prepare(execPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("preparing: %w", err)
 	}
 
 	defer u.clean()
 
-	err = u.downloadPackageFile(u.packageURL, u.packageName)
+	err = u.downloadPackageFile()
 	if err != nil {
-		return err
+		return fmt.Errorf("downloading package file: %w", err)
 	}
 
 	err = u.unpack()
 	if err != nil {
-		return err
+		return fmt.Errorf("unpacking: %w", err)
 	}
 
-	err = u.check()
-	if err != nil {
-		return err
+	if !firstRun {
+		err = u.check()
+		if err != nil {
+			return fmt.Errorf("checking config: %w", err)
+		}
 	}
 
-	err = u.backup()
+	err = u.backup(firstRun)
 	if err != nil {
-		return err
+		return fmt.Errorf("making backup: %w", err)
 	}
 
 	err = u.replace()
 	if err != nil {
-		return err
+		return fmt.Errorf("replacing: %w", err)
 	}
 
 	return nil
@@ -230,31 +238,35 @@ func (u *Updater) unpack() error {
 
 func (u *Updater) check() error {
 	log.Debug("updater: checking configuration")
+
 	err := copyFile(u.confName, filepath.Join(u.updateDir, "AdGuardHome.yaml"))
 	if err != nil {
 		return fmt.Errorf("copyFile() failed: %w", err)
 	}
+
 	cmd := exec.Command(u.updateExeName, "--check-config")
 	err = cmd.Run()
 	if err != nil || cmd.ProcessState.ExitCode() != 0 {
 		return fmt.Errorf("exec.Command(): %s %d", err, cmd.ProcessState.ExitCode())
 	}
+
 	return nil
 }
 
-func (u *Updater) backup() error {
+func (u *Updater) backup(firstRun bool) (err error) {
 	log.Debug("updater: backing up current configuration")
 	_ = os.Mkdir(u.backupDir, 0o755)
-	err := copyFile(u.confName, filepath.Join(u.backupDir, "AdGuardHome.yaml"))
-	if err != nil {
-		return fmt.Errorf("copyFile() failed: %w", err)
+	if !firstRun {
+		err = copyFile(u.confName, filepath.Join(u.backupDir, "AdGuardHome.yaml"))
+		if err != nil {
+			return fmt.Errorf("copyFile() failed: %w", err)
+		}
 	}
 
 	wd := u.workDir
 	err = copySupportingFiles(u.unpackedFiles, wd, u.backupDir)
 	if err != nil {
-		return fmt.Errorf("copySupportingFiles(%s, %s) failed: %s",
-			wd, u.backupDir, err)
+		return fmt.Errorf("copySupportingFiles(%s, %s) failed: %s", wd, u.backupDir, err)
 	}
 
 	return nil
@@ -297,9 +309,9 @@ func (u *Updater) clean() {
 const MaxPackageFileSize = 32 * 1024 * 1024
 
 // Download package file and save it to disk
-func (u *Updater) downloadPackageFile(url, filename string) (err error) {
+func (u *Updater) downloadPackageFile() (err error) {
 	var resp *http.Response
-	resp, err = u.client.Get(url)
+	resp, err = u.client.Get(u.packageURL)
 	if err != nil {
 		return fmt.Errorf("http request failed: %w", err)
 	}
@@ -321,7 +333,7 @@ func (u *Updater) downloadPackageFile(url, filename string) (err error) {
 	_ = os.Mkdir(u.updateDir, 0o755)
 
 	log.Debug("updater: saving package to file")
-	err = os.WriteFile(filename, body, 0o644)
+	err = os.WriteFile(u.packageName, body, 0o644)
 	if err != nil {
 		return fmt.Errorf("os.WriteFile() failed: %w", err)
 	}
@@ -504,10 +516,6 @@ func zipFileUnpack(zipfile, outDir string) (files []string, err error) {
 
 // Copy file on disk
 func copyFile(src, dst string) error {
-	if src == "" || src == dst {
-		return nil
-	}
-
 	d, e := os.ReadFile(src)
 	if e != nil {
 		return e
