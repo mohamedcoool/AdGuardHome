@@ -159,9 +159,9 @@ func sendSigReload() {
 	log.Debug("service: sent signal to pid %d", pid)
 }
 
-// tryRestartService tries to restart the service.  It returns an error if the
+// restartService tries to restart the service.  It returns an error if the
 // service couldn't be restarted.
-func tryRestartService() (err error) {
+func restartService() (err error) {
 	// Call chooseSystem explicitly to introduce OpenBSD support for service
 	// package.  It's a noop for other GOOS values.
 	chooseSystem()

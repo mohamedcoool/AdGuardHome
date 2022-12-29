@@ -75,16 +75,15 @@ func initDNSServer(
 	}
 
 	Context.clients.dnsServer = Context.dnsServer
-	var dnsConfig dnsforward.ServerConfig
 
-	dnsConfig, err = generateServerConfig(tlsConf, httpReg)
+	dnsConf, err := generateServerConfig(tlsConf, httpReg)
 	if err != nil {
 		closeDNSServer()
 
 		return fmt.Errorf("generateServerConfig: %w", err)
 	}
 
-	err = Context.dnsServer.Prepare(&dnsConfig)
+	err = Context.dnsServer.Prepare(&dnsConf)
 	if err != nil {
 		closeDNSServer()
 

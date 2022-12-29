@@ -455,8 +455,8 @@ func run(opts options, clientBuildFS fs.FS) {
 	err = setupConfig(opts)
 	fatalOnError(err)
 
-	// TODO(e.burkov):  This could probably be made much earlier and certainly
-	// could be done on the first run as well.
+	// TODO(e.burkov):  This could be made earlier, probably as the option's
+	// effect.
 	cmdlineUpdate(opts)
 
 	if !Context.firstRun {
@@ -1056,7 +1056,7 @@ func cmdlineUpdate(opts options) {
 	err = updater.Update(Context.firstRun)
 	fatalOnError(err)
 
-	err = tryRestartService()
+	err = restartService()
 	if err != nil {
 		log.Debug("restarting service: %s", err)
 		log.Info("It seems AdGuard Home isn't running as a service, " +

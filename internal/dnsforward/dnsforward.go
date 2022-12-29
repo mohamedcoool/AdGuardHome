@@ -474,7 +474,7 @@ func (s *Server) Prepare(conf *ServerConfig) (err error) {
 		return fmt.Errorf("preparing proxy: %w", err)
 	}
 
-	err = s.PrepareInternalProxy()
+	err = s.prepareInternalProxy()
 	if err != nil {
 		return fmt.Errorf("preparing internal proxy: %w", err)
 	}
@@ -527,9 +527,9 @@ func validateBlockingMode(mode BlockingMode, blockingIPv4, blockingIPv6 net.IP) 
 	}
 }
 
-// PrepareInternalProxy initializes the DNS proxy that is used for internal DNS
+// prepareInternalProxy initializes the DNS proxy that is used for internal DNS
 // queries, such as public clients PTR resolving and updater hostname resolving.
-func (s *Server) PrepareInternalProxy() (err error) {
+func (s *Server) prepareInternalProxy() (err error) {
 	srvConf := s.conf
 	conf := &proxy.Config{
 		CacheEnabled:   true,
