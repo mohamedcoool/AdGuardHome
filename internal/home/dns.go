@@ -40,9 +40,10 @@ func onConfigModified() {
 	}
 }
 
-// initDNSServer creates an instance of the dnsforward.Server
-// Please note that we must do it even if we don't start it
-// so that we had access to the query log and the stats
+// initDNSServer initializes the [context.dnsServer].  To only use the internal
+// proxy, none of the arguments are required, but tlsConf still must not be nil,
+// in other cases all the arguments also must not be nil.  It also must not be
+// called unless [configuration] and [context] are initialized.
 func initDNSServer(
 	filters *filtering.DNSFilter,
 	sts stats.Interface,
